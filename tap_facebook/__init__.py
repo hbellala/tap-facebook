@@ -406,7 +406,7 @@ class Campaigns(IncrementalStream):
         return self.account.get_campaigns(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
     def job_params(self):
-        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp)
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else None
 
         end_date = datetime.datetime.now()
         if CONFIG.get('end_date'):
