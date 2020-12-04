@@ -175,7 +175,7 @@ class IncrementalStream(Stream):
     def __attrs_post_init__(self):
         self.current_bookmark = get_start(self, UPDATED_TIME_KEY)
 
-    def _iterate(self, generator, record_preparation):
+    def _iterate(self, generator, record_preparation,date=None):
         max_bookmark = None
         for recordset in generator:
             for record in recordset:
@@ -185,10 +185,11 @@ class IncrementalStream(Stream):
                     continue
                 if not max_bookmark or updated_at > max_bookmark:
                     max_bookmark = updated_at
-
                 record = record_preparation(record)
                 yield {'record': record}
 
+            if date:
+                max_bookmark=date
             if max_bookmark:
                 yield {'state': advance_bookmark(self, UPDATED_TIME_KEY, str(max_bookmark))}
 
@@ -257,6 +258,24 @@ class Ads(IncrementalStream):
     field_class = fb_ad.Ad.Field
     key_properties = ['id', 'updated_time']
 
+    def job_params(self):
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp)
+
+        end_date = datetime.datetime.now()
+        if CONFIG.get('end_date'):
+            end_date = pendulum.parse(CONFIG.get('end_date'))
+
+        # Some automatic fields (primary-keys) cannot be used as 'fields' query params.
+        while start_date <= end_date:
+            yield {
+                'time_range': {'since': start_date.strftime('%Y-%m-%d'),
+                                 'until': start_date.strftime('%Y-%m-%d')},
+                'filtering': [{'field':'spend','operator':'GREATER_THAN','value':'0'}],
+                'limit': RESULT_RETURN_LIMIT
+            }
+            start_date = start_date + datetime.timedelta(days=1)
+
+
     @retry_pattern(backoff.expo, FacebookRequestError, max_tries=5, factor=5)
     def _call_get_ads(self, params):
         """
@@ -266,32 +285,42 @@ class Ads(IncrementalStream):
         return self.account.get_ads(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
     def __iter__(self):
+        if self.current_bookmark:
+            date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp)
         def do_request():
             params = {'limit': RESULT_RETURN_LIMIT}
             if self.current_bookmark:
-                params.update({'filtering': [{'field': 'ad.' + UPDATED_TIME_KEY, 'operator': 'GREATER_THAN', 'value': self.current_bookmark.int_timestamp}]})
+                params.update({'time_range': {'since': date.strftime('%Y-%m-%d'),
+                                 'until': date.strftime('%Y-%m-%d')}})
+                params.update({'filtering': [{'field':'spend','operator':'GREATER_THAN','value':'0'}]})
             yield self._call_get_ads(params)
 
         def do_request_multiple():
             params = {'limit': RESULT_RETURN_LIMIT}
             bookmark_params = []
             if self.current_bookmark:
-                bookmark_params.append({'field': 'ad.' + UPDATED_TIME_KEY, 'operator': 'GREATER_THAN', 'value': self.current_bookmark.int_timestamp})
+                bookmark_params.append({'field':'spend','operator':'GREATER_THAN','value':'0'})
+                bookmark_params.append({'time_range': {'since': date.strftime('%Y-%m-%d'),
+                                 'until': date.strftime('%Y-%m-%d')}})
             for del_info_filt in iter_delivery_info_filter('ad'):
                 params.update({'filtering': [del_info_filt] + bookmark_params})
                 filt_ads = self._call_get_ads(params)
                 yield filt_ads
+        
+        def do_request_updated(params):
+            yield self._call_get_ads(params)
 
         @retry_pattern(backoff.expo, FacebookRequestError, max_tries=5, factor=5)
         def prepare_record(ad):
             return ad.api_get(fields=self.fields()).export_all_data()
 
-        if CONFIG.get('include_deleted', 'false').lower() == 'true':
-            ads = do_request_multiple()
-        else:
-            ads = do_request()
-        for message in self._iterate(ads, prepare_record):
-            yield message
+        for params in self.job_params():
+            LOGGER.info(params)
+            ads = do_request_updated(params)
+            date += datetime.timedelta(days=1)
+            for message in self._iterate(ads, prepare_record, date if self.current_bookmark else None):
+                
+                yield message
 
 
 class AdSets(IncrementalStream):
@@ -310,34 +339,58 @@ class AdSets(IncrementalStream):
         """
         return self.account.get_ad_sets(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
+    def job_params(self):
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp)
+
+        end_date = datetime.datetime.now()
+        if CONFIG.get('end_date'):
+            end_date = pendulum.parse(CONFIG.get('end_date'))
+
+        # Some automatic fields (primary-keys) cannot be used as 'fields' query params.
+        while start_date <= end_date:
+            yield {
+                'time_range': {'since': start_date.strftime('%Y-%m-%d'),
+                                 'until': start_date.strftime('%Y-%m-%d')},
+                'filtering': [{'field':'spend','operator':'GREATER_THAN','value':'0'}],
+                'limit': RESULT_RETURN_LIMIT
+            }
+            start_date = start_date + datetime.timedelta(days=1)
+
     def __iter__(self):
+        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else None
         def do_request():
             params = {'limit': RESULT_RETURN_LIMIT}
             if self.current_bookmark:
-                params.update({'filtering': [{'field': 'adset.' + UPDATED_TIME_KEY, 'operator': 'GREATER_THAN', 'value': self.current_bookmark.int_timestamp}]})
+                params.update({'time_range': {'since': date.strftime('%Y-%m-%d'),
+                                 'until': date.strftime('%Y-%m-%d')}})
+                params.update({'filtering': [{'field':'spend','operator':'GREATER_THAN','value':'0'}]})
             yield self._call_get_ad_sets(params)
 
         def do_request_multiple():
             params = {'limit': RESULT_RETURN_LIMIT}
             bookmark_params = []
             if self.current_bookmark:
-                bookmark_params.append({'field': 'adset.' + UPDATED_TIME_KEY, 'operator': 'GREATER_THAN', 'value': self.current_bookmark.int_timestamp})
+                bookmark_params.append({'field':'spend','operator':'GREATER_THAN','value':'0'})
+                bookmark_params.append({'time_range': {'since': date.strftime('%Y-%m-%d'),
+                                 'until': date.strftime('%Y-%m-%d')}})
             for del_info_filt in iter_delivery_info_filter('adset'):
                 params.update({'filtering': [del_info_filt] + bookmark_params})
                 filt_adsets = self._call_get_ad_sets(params)
                 yield filt_adsets
 
+        def do_request_updated(params):
+            yield self._call_get_ad_sets(params)
+
         @retry_pattern(backoff.expo, FacebookRequestError, max_tries=5, factor=5)
         def prepare_record(ad_set):
             return ad_set.api_get(fields=self.fields()).export_all_data()
 
-        if CONFIG.get('include_deleted', 'false').lower() == 'true':
-            ad_sets = do_request_multiple()
-        else:
-            ad_sets = do_request()
-
-        for message in self._iterate(ad_sets, prepare_record):
-            yield message
+        for params in self.job_params():
+            LOGGER.info(params)
+            ads = do_request_updated(params)
+            date += datetime.timedelta(days=1) if self.current_bookmark else None
+            for message in self._iterate(ads, prepare_record, date):
+                yield message
 
 class Campaigns(IncrementalStream):
 
@@ -352,22 +405,47 @@ class Campaigns(IncrementalStream):
         """
         return self.account.get_campaigns(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
+    def job_params(self):
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp)
+
+        end_date = datetime.datetime.now()
+        if CONFIG.get('end_date'):
+            end_date = pendulum.parse(CONFIG.get('end_date'))
+
+        # Some automatic fields (primary-keys) cannot be used as 'fields' query params.
+        while start_date <= end_date:
+            yield {
+                'time_range': {'since': start_date.strftime('%Y-%m-%d'),
+                                 'until': start_date.strftime('%Y-%m-%d')},
+                'filtering': [{'field':'spend','operator':'GREATER_THAN','value':'0'}],
+                'limit': RESULT_RETURN_LIMIT
+            }
+            start_date = start_date + datetime.timedelta(days=1)
+
     def __iter__(self):
         props = self.fields()
         fields = [k for k in props if k != 'ads']
         pull_ads = 'ads' in props
+        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else None
 
         def do_request():
             params = {'limit': RESULT_RETURN_LIMIT}
             if self.current_bookmark:
-                params.update({'filtering': [{'field': 'campaign.' + UPDATED_TIME_KEY, 'operator': 'GREATER_THAN', 'value': self.current_bookmark.int_timestamp}]})
+                params.update({'time_range': {'since': date.strftime('%Y-%m-%d'),
+                                 'until': date.strftime('%Y-%m-%d')}})
+                params.update({'filtering': [{'field':'spend','operator':'GREATER_THAN','value':'0'}]})
+            yield self._call_get_campaigns(params)
+        
+        def do_request_updated(params):
             yield self._call_get_campaigns(params)
 
         def do_request_multiple():
             params = {'limit': RESULT_RETURN_LIMIT}
             bookmark_params = []
             if self.current_bookmark:
-                bookmark_params.append({'field': 'campaign.' + UPDATED_TIME_KEY, 'operator': 'GREATER_THAN', 'value': self.current_bookmark.int_timestamp})
+                bookmark_params.append({'field':'spend','operator':'GREATER_THAN','value':'0'})
+                bookmark_params.append({'time_range': {'since': date.strftime('%Y-%m-%d'),
+                                 'until': date.strftime('%Y-%m-%d')}})
             for del_info_filt in iter_delivery_info_filter('campaign'):
                 params.update({'filtering': [del_info_filt] + bookmark_params})
                 filt_campaigns = self._call_get_campaigns(params)
@@ -383,13 +461,12 @@ class Campaigns(IncrementalStream):
                     campaign_out['ads']['data'].append({'id': ad_id})
             return campaign_out
 
-        if CONFIG.get('include_deleted', 'false').lower() == 'true':
-            campaigns = do_request_multiple()
-        else:
-            campaigns = do_request()
-
-        for message in self._iterate(campaigns, prepare_record):
-            yield message
+        for params in self.job_params():
+            LOGGER.info(params)
+            ads = do_request_updated(params)
+            date += datetime.timedelta(days=1) if self.current_bookmark else None
+            for message in self._iterate(ads, prepare_record, date):
+                yield message
 
 
 ALL_ACTION_ATTRIBUTION_WINDOWS = [
