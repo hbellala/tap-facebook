@@ -259,9 +259,8 @@ class Ads(IncrementalStream):
     key_properties = ['id', 'updated_time']
 
     def job_params(self):
-        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.now()
-
-        end_date = datetime.datetime.now()
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.strptime(CONFIG['start_date'], "%Y-%m-%d")
+        end_date = datetime.datetime.now() - datetime.timedelta(days=1)
         if CONFIG.get('end_date'):
             end_date = pendulum.parse(CONFIG.get('end_date'))
 
@@ -285,8 +284,7 @@ class Ads(IncrementalStream):
         return self.account.get_ads(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
     def __iter__(self):
-        if self.current_bookmark:
-            date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp)
+        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.strptime(CONFIG['start_date'], "%Y-%m-%d")
         def do_request():
             params = {'limit': RESULT_RETURN_LIMIT}
             if self.current_bookmark:
@@ -318,8 +316,8 @@ class Ads(IncrementalStream):
             LOGGER.info(params)
             ads = do_request_updated(params)
             if date:
-                date += datetime.timedelta(days=1) if self.current_bookmark else None
-            for message in self._iterate(ads, prepare_record, date if self.current_bookmark else None):
+                date += datetime.timedelta(days=1)
+            for message in self._iterate(ads, prepare_record, date):
                 yield message
 
 
@@ -340,9 +338,9 @@ class AdSets(IncrementalStream):
         return self.account.get_ad_sets(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
     def job_params(self):
-        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.now()
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.strptime(CONFIG['start_date'], "%Y-%m-%d")
 
-        end_date = datetime.datetime.now()
+        end_date = datetime.datetime.now() - datetime.timedelta(days=1)
         if CONFIG.get('end_date'):
             end_date = pendulum.parse(CONFIG.get('end_date'))
 
@@ -357,7 +355,7 @@ class AdSets(IncrementalStream):
             start_date = start_date + datetime.timedelta(days=1)
 
     def __iter__(self):
-        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else None
+        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.strptime(CONFIG['start_date'], "%Y-%m-%d")
         def do_request():
             params = {'limit': RESULT_RETURN_LIMIT}
             if self.current_bookmark:
@@ -389,7 +387,7 @@ class AdSets(IncrementalStream):
             LOGGER.info(params)
             ads = do_request_updated(params)
             if date:
-                date += datetime.timedelta(days=1) if self.current_bookmark else None
+                date += datetime.timedelta(days=1)
             for message in self._iterate(ads, prepare_record, date=None):
                 yield message
 
@@ -407,9 +405,9 @@ class Campaigns(IncrementalStream):
         return self.account.get_campaigns(fields=self.automatic_fields(), params=params) # pylint: disable=no-member
 
     def job_params(self):
-        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.now()
+        start_date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.strptime(CONFIG['start_date'], "%Y-%m-%d")
 
-        end_date = datetime.datetime.now()
+        end_date = datetime.datetime.now() - datetime.timedelta(days=1)
         if CONFIG.get('end_date'):
             end_date = pendulum.parse(CONFIG.get('end_date'))
 
@@ -427,7 +425,7 @@ class Campaigns(IncrementalStream):
         props = self.fields()
         fields = [k for k in props if k != 'ads']
         pull_ads = 'ads' in props
-        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else None
+        date = datetime.datetime.fromtimestamp(self.current_bookmark.int_timestamp) if self.current_bookmark else datetime.datetime.strptime(CONFIG['start_date'], "%Y-%m-%d")
 
         def do_request():
             params = {'limit': RESULT_RETURN_LIMIT}
@@ -466,7 +464,7 @@ class Campaigns(IncrementalStream):
             LOGGER.info(params)
             ads = do_request_updated(params)
             if date:
-                date += datetime.timedelta(days=1) if self.current_bookmark else None
+                date += datetime.timedelta(days=1)
             for message in self._iterate(ads, prepare_record, date=None):
                 yield message
 
@@ -665,7 +663,6 @@ def initialize_stream(account, catalog_entry, state): # pylint: disable=too-many
 
     name = catalog_entry.stream
     stream_alias = catalog_entry.stream_alias
-
     if name in INSIGHTS_BREAKDOWNS_OPTIONS:
         return AdsInsights(name, account, stream_alias, catalog_entry, state=state,
                            options=INSIGHTS_BREAKDOWNS_OPTIONS[name])
